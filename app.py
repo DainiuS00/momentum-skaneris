@@ -181,7 +181,6 @@ def analizuoti(tickeriai, progress, statusas_txt):
         )
 
     for i, tickeris in enumerate(tickeriai):
-        # Pataisytas filtras — Japonijos tickeriai nebėra blokuojami
         if yra_etf_filtras(tickeris):
             praleista_istorija += 1
             progress.progress((i + 1) / len(tickeriai))
@@ -517,6 +516,58 @@ def rodyti_rinku_skydeli():
 
 # Rinkų skydelis
 rodyti_rinku_skydeli()
+st.divider()
+
+# ============================================
+# DEBUG SEKCIJA — laikinai, diagnostikai
+# ============================================
+with st.expander("🔍 DEBUG — testuoti tickerius", expanded=True):
+    debug_ticker = st.text_input("Įvesk tickerį testavimui", value="0700.HK")
+
+    if st.button("🧪 Testuoti"):
+        st.write(f"### Testuojama: `{debug_ticker}`")
+
+        st.write("**1. Bandymas gauti history (2y):**")
+        try:
+            akcija = yf.Ticker(debug_ticker)
+            duomenys = akcija.history(period="2y")
+            if duomenys.empty:
+                st.error("❌ history() grąžino TUŠČIĄ DataFrame")
+            else:
+                st.success(f"✅ history() OK — {len(duomenys)} eilučių")
+                st.write(f"Paskutinė kaina: {duomenys['Close'].iloc[-1]}")
+                st.write(f"Pirma data: {duomenys.index[0]}, paskutinė: {duomenys.index[-1]}")
+        except Exception as e:
+            st.error(f"❌ history() KLAIDA: {type(e).__name__}: {e}")
+
+        st.write("**2. Bandymas gauti .info:**")
+        try:
+            akcija2 = yf.Ticker(debug_ticker)
+            info = akcija2.info
+            if not info or len(info) < 2:
+                st.error(f"❌ .info tuščias arba minimalus: {info}")
+            else:
+                st.success(f"✅ .info OK — {len(info)} laukų")
+                st.write(f"trailingPE: {info.get('trailingPE', 'nėra')}")
+                st.write(f"shortName: {info.get('shortName', 'nėra')}")
+        except Exception as e:
+            st.error(f"❌ .info KLAIDA: {type(e).__name__}: {e}")
+
+        st.write("**3. Bandymas gauti fast_info:**")
+        try:
+            akcija3 = yf.Ticker(debug_ticker)
+            fi = akcija3.fast_info
+            st.success(f"✅ fast_info OK")
+            try:
+                st.write(f"last_price: {fi.get('lastPrice', 'nėra')}")
+            except:
+                st.write(f"fast_info objektas: {fi}")
+        except Exception as e:
+            st.error(f"❌ fast_info KLAIDA: {type(e).__name__}: {e}")
+
+        st.write("**4. yfinance versija:**")
+        st.write(f"yfinance: {yf.__version__}")
+
 st.divider()
 
 if st.button("🚀 Analizuoti S&P 500"):
