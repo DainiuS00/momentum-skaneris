@@ -2,12 +2,44 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 
-st.set_page_config(page_title="Momentum Skaneris", layout="wide")
-st.title("📈 Globalus Momentum Skaneris")
-st.caption("ℹ️ Spalvų legenda: 🟢 Stiprus signalas | 🟡 Yra įspėjimų | 🔴 Praleisk | 🔵 Overbought (RSI>70) | ⚫ Oversold (RSI<35) | ⚡ Earnings <14d | 📰 Naujienos 48h")
+st.set_page_config(
+    page_title="Momentum Skaneris",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+    page_icon="📈"
+)
+
+st.markdown("""
+<style>
+    .block-container {
+        padding-top: 1rem;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+    }
+    [data-testid="stMetricValue"] { font-size: 0.9rem; }
+    [data-testid="stMetricLabel"] { font-size: 0.7rem; }
+    .stButton > button {
+        width: 100%;
+        padding: 0.6rem;
+        font-size: 1rem;
+        margin-bottom: 4px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("📈 Momentum Skaneris")
+st.caption("🟢 Stiprus | 🟡 Įspėjimas | 🔴 Praleisk | 🔵 Overbought | ⚫ Oversold")
+
+
+# ============================================
+# PAGRINDINĖS FUNKCIJOS
+# ============================================
 
 def momentum_proc(kaina_pradzioje, kaina_dabar):
+    if kaina_pradzioje == 0:
+        return 0
     return (kaina_dabar - kaina_pradzioje) / kaina_pradzioje * 100
+
 
 def skaiciuoti_rsi(kainos, periodas=14):
     pokyciai = kainos.diff()
@@ -20,18 +52,22 @@ def skaiciuoti_rsi(kainos, periodas=14):
     rs = vid_kilimas / vid_kritimas
     return round(100 - (100 / (1 + rs)), 1)
 
+
 def gauti_fundamentalus(ticker_obj):
     try:
         info = ticker_obj.info
+        if not info or len(info) < 5:
+            return None, None, None, None
     except:
         return None, None, None, None
     revenue_growth = info.get("revenueGrowth")
     debt_to_equity = info.get("debtToEquity")
     free_cash_flow = info.get("freeCashflow")
-    roe            = info.get("returnOnEquity")
+    roe = info.get("returnOnEquity")
     return revenue_growth, debt_to_equity, free_cash_flow, roe
 
-def vertinti_fundamentalus(revenue_growth, debt_to_equity, free_cash_flow, roe):
+
+def vertinti_fundamentalus(revenue_growth, debt_to_equity, free_cash_flow, roe, regionas="US"):
     score_papildas = 0
     ispejimai = []
     raudoni = 0
@@ -44,25 +80,29 @@ def vertinti_fundamentalus(revenue_growth, debt_to_equity, free_cash_flow, roe):
         score_papildas += 20
     elif revenue_growth > 0.05:
         score_papildas += 10
-    elif revenue_growth < 0:
+    elif revenue_growth < -0.10:
         score_papildas -= 15
-        ispejimai.append("📉 Pajamos mažėja")
+        ispejimai.append("📉 Pajamos↓")
         raudoni += 1
+    elif revenue_growth < 0:
+        score_papildas -= 5
+        ispejimai.append("⚠️ Pajamos↓ šiek tiek")
+        geltoni += 1
 
     if debt_to_equity is None:
         truksta += 1
     else:
-        de = debt_to_equity / 100
+        de = debt_to_equity / 100 if debt_to_equity > 10 else debt_to_equity
         if de < 0.5:
             score_papildas += 10
         elif de < 1.5:
             score_papildas += 5
         elif de < 3.0:
-            ispejimai.append("⚠️ Didelė skola")
+            ispejimai.append("⚠️ Skola↑")
             geltoni += 1
         else:
-            score_papildas -= 20
-            ispejimai.append("🔴 Kritiškai didelė skola")
+            score_papildas -= 15
+            ispejimai.append("🔴 Skola kritinė")
             raudoni += 1
 
     if free_cash_flow is None:
@@ -70,7 +110,7 @@ def vertinti_fundamentalus(revenue_growth, debt_to_equity, free_cash_flow, roe):
     elif free_cash_flow > 0:
         score_papildas += 10
     else:
-        ispejimai.append("⚠️ Neigiamas cash flow")
+        ispejimai.append("⚠️ FCF<0")
         geltoni += 1
         score_papildas -= 5
 
@@ -80,34 +120,45 @@ def vertinti_fundamentalus(revenue_growth, debt_to_equity, free_cash_flow, roe):
         score_papildas += 15
     elif roe > 0.05:
         score_papildas += 5
-    elif roe < 0:
-        ispejimai.append("📉 Nuostolingas")
+    elif roe < -0.10:
+        ispejimai.append("📉 Nuostolis")
         raudoni += 1
         score_papildas -= 20
+    elif roe < 0:
+        ispejimai.append("⚠️ ROE neigiamas")
+        geltoni += 1
+        score_papildas -= 5
 
     if truksta == 4:
-        return 0, ["❓ Fundamentalių duomenų nėra"], "geltona"
+        return 0, ["❓ Nėra fund. duomenų"], "geltona"
 
     if truksta >= 2:
-        ispejimai.append(f"❓ Trūksta {truksta}/4 rodiklių")
-        geltoni += 1
+        ispejimai.append(f"❓ {truksta}/4 trūksta")
+        if regionas not in ("JP", "HK"):
+            geltoni += 1
 
-    if raudoni >= 1:
+    if raudoni >= 2:
         statusas = "raudona"
-    elif geltoni >= 2 or truksta >= 1:
+    elif raudoni == 1 and geltoni >= 2:
+        statusas = "raudona"
+    elif geltoni >= 3:
+        statusas = "geltona"
+    elif geltoni >= 1 or truksta >= 2:
         statusas = "geltona"
     else:
         statusas = "zalia"
 
     return score_papildas, ispejimai, statusas
 
+
 def skaiciuoti_score(m1, m3, m6, m12, rsi, pe, fund_papildas):
     score = 0
-    score += m6  * 0.35
-    score += m3  * 0.25
+    score += m6 * 0.35
+    score += m3 * 0.25
     score += m12 * 0.20
-    score += m1  * 0.10
+    score += m1 * 0.10
     score += fund_papildas * 0.10
+
     if 50 <= rsi <= 65:
         score += 10
     elif 40 <= rsi < 50:
@@ -116,6 +167,7 @@ def skaiciuoti_score(m1, m3, m6, m12, rsi, pe, fund_papildas):
         score -= 10
     elif rsi < 35:
         score -= 5
+
     if pe is not None:
         if pe < 20:
             score += 15
@@ -123,18 +175,23 @@ def skaiciuoti_score(m1, m3, m6, m12, rsi, pe, fund_papildas):
             score += 8
         elif pe > 100:
             score -= 10
+
     return round(score, 1)
+
 
 def gauti_naujienas(ticker):
     try:
         naujienos = yf.Ticker(ticker).news
-        turi = len(naujienos) > 0 and any(
-            n.get("providerPublishTime", 0) > pd.Timestamp.now().timestamp() - 48*3600
+        if not naujienos:
+            return False, []
+        turi = any(
+            n.get("providerPublishTime", 0) > pd.Timestamp.now().timestamp() - 48 * 3600
             for n in naujienos
         )
         return turi, naujienos[:3] if turi else []
     except:
         return False, []
+
 
 def gauti_earnings(ticker):
     try:
@@ -151,18 +208,36 @@ def gauti_earnings(ticker):
         pass
     return None
 
+
 def yra_etf_filtras(tickeris):
-    """
-    Filtruoja ETF/ETP tickerius.
-    - IE0..., LU0... — visada ETF
-    - 0... + .HK pabaiga — Honkongo ETF/ETP
-    - Japonijos tickeriai (pvz. 6976.T) NĖRA filtruojami net jei prasideda skaičiumi
-    """
-    if tickeris.startswith("IE0") or tickeris.startswith("LU0"):
+    if tickeris.startswith("IE00") or tickeris.startswith("LU0"):
         return True
-    if tickeris.startswith("0") and tickeris.endswith(".HK"):
+
+    etf_sarasas = {
+        "2800.HK", "2801.HK", "2802.HK", "2823.HK", "3188.HK",
+        "3067.HK", "3033.HK", "2828.HK", "3037.HK", "9067.HK",
+        "SPY", "QQQ", "IVV", "VOO", "VTI", "DIA",
+    }
+    if tickeris in etf_sarasas:
         return True
+
     return False
+
+
+def nustatyti_regiona(tickeris):
+    if tickeris.endswith(".T") or tickeris.endswith(".JP"):
+        return "JP"
+    elif tickeris.endswith(".HK"):
+        return "HK"
+    elif any(tickeris.endswith(s) for s in [
+        ".L", ".DE", ".PA", ".AS", ".MC", ".MI", ".ST",
+        ".CO", ".OL", ".HE", ".BR", ".LS", ".VI",
+        ".WA", ".IR", ".SW", ".F"
+    ]):
+        return "EU"
+    else:
+        return "US"
+
 
 def analizuoti(tickeriai, progress, statusas_txt):
     rezultatai = []
@@ -170,236 +245,255 @@ def analizuoti(tickeriai, progress, statusas_txt):
     praleista_klaida = 0
     praleista_istorija = 0
     praleista_raudona = 0
+    praleista_etf = 0
 
-    def atnaujinti_statusa(i):
+    total = len(tickeriai)
+
+    def atnaujinti(i):
         statusas_txt.text(
-            f"⏳ {i+1}/{len(tickeriai)} | "
-            f"✅ Įtraukta: {sekmingai} | "
-            f"⚠️ Trumpa istorija: {praleista_istorija} | "
+            f"⏳ {i+1}/{total} | "
+            f"✅ {sekmingai} | "
+            f"📊 Trumpa: {praleista_istorija} | "
             f"❌ Klaidos: {praleista_klaida} | "
-            f"🔴 Filtruota: {praleista_raudona}"
+            f"🔴 Filtruota: {praleista_raudona} | "
+            f"🏷️ ETF: {praleista_etf}"
         )
 
     for i, tickeris in enumerate(tickeriai):
         if yra_etf_filtras(tickeris):
-            praleista_istorija += 1
-            progress.progress((i + 1) / len(tickeriai))
-            atnaujinti_statusa(i)
+            praleista_etf += 1
+            progress.progress((i + 1) / total)
+            atnaujinti(i)
             continue
+
+        regionas = nustatyti_regiona(tickeris)
+
         try:
             akcija = yf.Ticker(tickeris)
             duomenys = akcija.history(period="2y")
-            kainos = duomenys["Close"]
 
-            if len(kainos) < 200:
+            if duomenys.empty or "Close" not in duomenys.columns:
                 praleista_istorija += 1
-                progress.progress((i + 1) / len(tickeriai))
-                atnaujinti_statusa(i)
+                progress.progress((i + 1) / total)
+                atnaujinti(i)
+                continue
+
+            kainos = duomenys["Close"].dropna()
+
+            min_dienos = {
+                "US": 200,
+                "EU": 150,
+                "JP": 150,
+                "HK": 150,
+            }
+            reikia = min_dienos.get(regionas, 150)
+
+            if len(kainos) < reikia:
+                praleista_istorija += 1
+                progress.progress((i + 1) / total)
+                atnaujinti(i)
                 continue
 
             kaina_dabar = kainos.iloc[-1]
-            m1  = momentum_proc(kainos.iloc[-21],  kaina_dabar)
-            m3  = momentum_proc(kainos.iloc[-63],  kaina_dabar)
-            m6  = momentum_proc(kainos.iloc[-126], kaina_dabar)
-            m12 = momentum_proc(kainos.iloc[-252], kaina_dabar)
+
+            def saugus_momentum(dienos):
+                idx = min(dienos, len(kainos) - 1)
+                return momentum_proc(kainos.iloc[-idx], kaina_dabar)
+
+            m1 = saugus_momentum(21)
+            m3 = saugus_momentum(63)
+            m6 = saugus_momentum(126)
+            m12 = saugus_momentum(min(252, len(kainos) - 1))
+
             rsi = skaiciuoti_rsi(kainos)
 
-            info = akcija.info
-            pe = info.get("trailingPE")
-            if pe is not None:
-                pe = round(pe, 1)
+            try:
+                info = akcija.info
+                pe = info.get("trailingPE")
+                if pe is not None:
+                    pe = round(pe, 1)
+            except:
+                info = {}
+                pe = None
 
             rev_g, d2e, fcf, roe = gauti_fundamentalus(akcija)
-            fund_papildas, ispejimai, fund_statusas = vertinti_fundamentalus(rev_g, d2e, fcf, roe)
+            fund_papildas, ispejimai, fund_statusas = vertinti_fundamentalus(
+                rev_g, d2e, fcf, roe, regionas=regionas
+            )
 
             if fund_statusas == "raudona":
                 praleista_raudona += 1
-                progress.progress((i + 1) / len(tickeriai))
-                atnaujinti_statusa(i)
+                progress.progress((i + 1) / total)
+                atnaujinti(i)
                 continue
 
             anomalija = m6 > 300
             score = skaiciuoti_score(m1, m3, m6, m12, rsi, pe, fund_papildas)
             sekmingai += 1
 
+            if d2e is not None:
+                de_display = d2e / 100 if d2e > 10 else d2e
+                de_str = f"{round(de_display, 2)}"
+            else:
+                de_str = "—"
+
             rezultatai.append({
                 "Ticker":    tickeris,
-                "1mėn %":    round(m1, 1),
-                "3mėn %":    round(m3, 1),
-                "6mėn %":    round(m6, 1),
-                "12mėn %":   round(m12, 1),
-                "P/E":       pe if pe is not None else "n/a",
+                "Regionas":  regionas,
+                "1m%":       round(m1, 1),
+                "3m%":       round(m3, 1),
+                "6m%":       round(m6, 1),
+                "12m%":      round(m12, 1),
+                "P/E":       pe if pe else "—",
                 "RSI":       rsi,
-                "Rev":       f"{round(rev_g*100,1)}%" if rev_g is not None else "n/a",
-                "D/E":       f"{round(d2e/100,2)}" if d2e is not None else "n/a",
-                "FCF":       "✅" if fcf and fcf > 0 else ("❌" if fcf and fcf <= 0 else "n/a"),
-                "ROE":       f"{round(roe*100,1)}%" if roe is not None else "n/a",
+                "Rev":       f"{round(rev_g*100,1)}%" if rev_g is not None else "—",
+                "D/E":       de_str,
+                "FCF":       "✅" if fcf and fcf > 0 else ("❌" if fcf is not None and fcf <= 0 else "—"),
+                "ROE":       f"{round(roe*100,1)}%" if roe is not None else "—",
                 "Įspėjimai": ispejimai,
                 "Statusas":  fund_statusas,
                 "Score":     score,
                 "Anomalija": anomalija,
             })
+
         except Exception:
             praleista_klaida += 1
 
-        progress.progress((i + 1) / len(tickeriai))
-        atnaujinti_statusa(i)
+        progress.progress((i + 1) / total)
+        atnaujinti(i)
 
     statusas_txt.text(
         f"✅ Baigta! Įtraukta: {sekmingai} | "
         f"Trumpa istorija: {praleista_istorija} | "
         f"Klaidos: {praleista_klaida} | "
-        f"Filtruota (raudona): {praleista_raudona}"
+        f"Filtruota: {praleista_raudona} | "
+        f"ETF: {praleista_etf}"
     )
     return rezultatai
 
+
 def rodyti_rezultatus(rezultatai, pavadinimas):
-    rezultatai.sort(key=lambda x: x["Score"] if isinstance(x["Score"], (int, float)) else 0, reverse=True)
-    normalus   = [r for r in rezultatai if not r["Anomalija"]]
+    rezultatai.sort(key=lambda x: x["Score"], reverse=True)
+    normalus = [r for r in rezultatai if not r["Anomalija"]]
     anomalijos = [r for r in rezultatai if r["Anomalija"]]
 
     st.subheader(f"🏆 TOP 20 {pavadinimas}")
-    dabar = pd.Timestamp.now(tz="UTC")
+    st.caption(f"Iš viso rastų akcijų: {len(rezultatai)}")
+
+    if not normalus:
+        st.warning("⚠️ Nerasta tinkamų akcijų! Patikrink tickerių sąrašą.")
+        return normalus, anomalijos
+
+    nr1 = normalus[0]
+    st.success(
+        f"🥇 **{nr1['Ticker']}** ({nr1['Regionas']}) — "
+        f"Score: **{nr1['Score']}** | RSI: {nr1['RSI']} | 6m: {nr1['6m%']}%"
+    )
 
     top20 = normalus[:20]
-    eilutes = []
+    dabar = pd.Timestamp.now(tz="UTC")
+
+    df_trumpa = pd.DataFrame([{
+        "":       ("🟢" if r["Statusas"] == "zalia" else "🟡"),
+        "Ticker": r["Ticker"],
+        "Score":  r["Score"],
+        "6m%":    r["6m%"],
+        "3m%":    r["3m%"],
+        "RSI":    r["RSI"],
+        "P/E":    r["P/E"],
+    } for r in top20])
+
+    st.dataframe(df_trumpa, hide_index=True, use_container_width=True)
+
+    with st.expander("📊 Pilna lentelė"):
+        df_pilna = pd.DataFrame([{
+            "Ticker": r["Ticker"],
+            "Reg":    r["Regionas"],
+            "Score":  r["Score"],
+            "1m%":    r["1m%"],
+            "3m%":    r["3m%"],
+            "6m%":    r["6m%"],
+            "12m%":   r["12m%"],
+            "RSI":    r["RSI"],
+            "P/E":    r["P/E"],
+            "Rev":    r["Rev"],
+            "D/E":    r["D/E"],
+            "FCF":    r["FCF"],
+            "ROE":    r["ROE"],
+        } for r in top20])
+        st.dataframe(df_pilna, hide_index=True, use_container_width=True)
+
+    ispejimai_list = []
     for r in top20:
-        ticker  = r["Ticker"]
-        rsi     = r["RSI"]
-        statusas = r["Statusas"]
+        ticker = r["Ticker"]
+        rsi = r["RSI"]
+        warns = list(r["Įspėjimai"])
 
-        if statusas == "raudona":
-            spalva = "🔴"
-        elif rsi > 75:
-            spalva = "🔵"
-        elif rsi < 30:
-            spalva = "⚫"
-        elif statusas == "zalia":
-            spalva = "🟢"
-        else:
-            spalva = "🟡"
-
-        turi_naujienu, naujienos = gauti_naujienas(ticker)
-        earnings_data = gauti_earnings(ticker)
-        earnings_artimas = False
-        earnings_str = ""
-        if earnings_data is not None:
-            try:
-                ed = earnings_data.tz_localize("UTC") if earnings_data.tzinfo is None else earnings_data
-                if 0 <= (ed - dabar).days <= 14:
-                    earnings_artimas = True
-                    earnings_str = f"⚡ {earnings_data.strftime('%m-%d')}"
-            except:
-                pass
-
-        ispejimai = list(r["Įspėjimai"])
         if rsi > 75:
-            ispejimai.append("🔵 RSI>75 — overbought")
+            warns.append("🔵 Overbought")
         if rsi < 30:
-            ispejimai.append("⚫ RSI<30 — oversold")
-        if turi_naujienu:
-            ispejimai.append("📰 Naujienos 48h")
-        if earnings_artimas:
-            ispejimai.append(earnings_str)
+            warns.append("⚫ Oversold")
 
-        eilutes.append({
-            "r": r,
-            "spalva": spalva,
-            "ispejimai": ispejimai,
-            "naujienos": naujienos,
-            "turi_naujienu": turi_naujienu,
-        })
+        if top20.index(r) < 10:
+            turi_nauj, naujienos = gauti_naujienas(ticker)
+            if turi_nauj:
+                warns.append("📰 Naujienos 48h")
+            ed = gauti_earnings(ticker)
+            if ed:
+                try:
+                    ed_tz = ed.tz_localize("UTC") if ed.tzinfo is None else ed
+                    if 0 <= (ed_tz - dabar).days <= 14:
+                        warns.append(f"⚡ Earnings {ed.strftime('%m-%d')}")
+                except:
+                    pass
 
-    lentelės_duomenys = []
-    for e in eilutes:
-        r = e["r"]
-        lentelės_duomenys.append({
-            "":        e["spalva"],
-            "Ticker":  r["Ticker"],
-            "Score":   r["Score"],
-            "1mėn%":   r["1mėn %"],
-            "3mėn%":   r["3mėn %"],
-            "6mėn%":   r["6mėn %"],
-            "12mėn%":  r["12mėn %"],
-            "RSI":     r["RSI"],
-            "P/E":     r["P/E"],
-            "Rev":     r["Rev"],
-            "D/E":     r["D/E"],
-            "FCF":     r["FCF"],
-            "ROE":     r["ROE"],
-        })
+        if warns:
+            spalva = "🟢" if r["Statusas"] == "zalia" else "🟡"
+            ispejimai_list.append(f"**{spalva} {ticker}:** {' | '.join(warns)}")
 
-    df = pd.DataFrame(lentelės_duomenys)
-    st.dataframe(df, width="stretch", hide_index=True)
-
-    ispejimai_visi = []
-    for e in eilutes:
-        if e["ispejimai"]:
-            ticker = e["r"]["Ticker"]
-            txt = f"**{e['spalva']} {ticker}:** " + " | ".join(e["ispejimai"])
-            ispejimai_visi.append(txt)
-
-    if ispejimai_visi:
+    if ispejimai_list:
         with st.expander("⚠️ Įspėjimai ir pastabos", expanded=True):
-            for txt in ispejimai_visi:
+            for txt in ispejimai_list:
                 st.markdown(txt)
-            for e in eilutes:
-                if e["turi_naujienu"] and e["naujienos"]:
-                    st.markdown(f"**📰 {e['r']['Ticker']} naujienos:**")
-                    for n in e["naujienos"]:
-                        st.markdown(f"- [{n.get('title','')}]({n.get('link','#')})")
 
     if anomalijos:
-        st.markdown("---")
-        st.markdown(
-            "<div style='background:#2d1a00;border-left:4px solid #ff6600;"
-            "padding:10px;border-radius:6px;margin-bottom:8px'>"
-            "<b>⚠️ ANOMALIJOS — augimas >300% per 6 mėn</b><br>"
-            "<small>Dėmesio: šios kompanijos auga nenormaliai greitai. "
-            "Gali būti spekuliacinis burbulas arba tikras proveržis. Tikrinti atidžiai.</small>"
-            "</div>",
-            unsafe_allow_html=True
-        )
-        df_an = pd.DataFrame(anomalijos[:5])[
-            ["Ticker","1mėn %","3mėn %","6mėn %","12mėn %","P/E","RSI","Rev","D/E","FCF","ROE","Score"]
-        ]
-        st.dataframe(df_an, width="stretch", hide_index=True)
-
-    if normalus:
-        st.success(f"✅ {pavadinimas} signalas: **{normalus[0]['Ticker']}** (Score: {normalus[0]['Score']})")
+        with st.expander(f"⚠️ Anomalijos ({len(anomalijos)} vnt.) — augimas >300%/6mėn"):
+            for r in anomalijos[:5]:
+                st.markdown(
+                    f"**{r['Ticker']}** ({r['Regionas']}) — "
+                    f"6m: {r['6m%']}% | Score: {r['Score']}"
+                )
 
     return normalus, anomalijos
 
 
-SALIES_SUFIKSAS = {
-    "United Kingdom": ".L",  "Switzerland": ".SW", "France": ".PA",
-    "Germany": ".DE",        "Netherlands": ".AS", "Spain": ".MC",
-    "Italy": ".MI",          "Sweden": ".ST",      "Denmark": ".CO",
-    "Norway": ".OL",         "Finland": ".HE",     "Belgium": ".BR",
-    "Portugal": ".LS",       "Austria": ".VI",     "Poland": ".WA",
-    "Ireland": ".IR",        "Luxembourg": ".LU",
-}
-
 def gauti_tickerius_sp500():
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    lentele = pd.read_html(url, storage_options={"User-Agent": "Mozilla/5.0"})[0]
-    return [t.replace(".", "-") for t in lentele["Symbol"].tolist()]
+    try:
+        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        lentele = pd.read_html(url, storage_options={"User-Agent": "Mozilla/5.0"})[0]
+        return [t.replace(".", "-") for t in lentele["Symbol"].tolist()]
+    except Exception as e:
+        st.error(f"S&P 500 klaida: {e}")
+        return []
+
 
 def gauti_tickerius_europa():
+    tickeriai = []
+
     try:
         from pytickersymbols import PyTickerSymbols
         stock_data = PyTickerSymbols()
         indeksai = [
-            "DAX", "CAC_40", "CAC Mid 60", "FTSE 100", "IBEX 35",
-            "AEX", "BEL 20", "OMX Stockholm 30", "OMX Helsinki 25",
-            "MDAX", "SDAX", "TecDAX", "EURO STOXX 50", "Switzerland 20",
+            "DAX", "CAC_40", "FTSE 100", "IBEX 35", "AEX",
+            "BEL 20", "OMX Stockholm 30", "OMX Helsinki 25",
+            "MDAX", "SDAX", "TecDAX", "EURO STOXX 50",
+            "Switzerland 20",
         ]
         pirmenybe = [
             ".DE", ".PA", ".L", ".AS", ".MC", ".MI",
             ".ST", ".CO", ".OL", ".HE", ".BR", ".LS",
             ".VI", ".WA", ".IR", ".LU", ".SW", ".F",
         ]
-        tickeriai = []
         for indeksas in indeksai:
             try:
                 akcijos = list(stock_data.get_stocks_by_index(indeksas))
@@ -419,205 +513,184 @@ def gauti_tickerius_europa():
                         tickeriai.append(rastas)
             except:
                 pass
-        return list(dict.fromkeys([t for t in tickeriai if t]))
-    except Exception as e:
-        st.error(f"Europa klaida: {e}")
-        return []
+    except ImportError:
+        st.warning("⚠️ pytickersymbols neįdiegta — naudojamas atsarginis sąrašas")
+
+    if len(tickeriai) < 50:
+        fallback_eu = [
+            "SAP.DE", "SIE.DE", "ALV.DE", "DTE.DE", "MBG.DE",
+            "BMW.DE", "BAS.DE", "MUV2.DE", "ADS.DE", "IFX.DE",
+            "AIR.DE", "DHL.DE", "RWE.DE", "HEN3.DE", "VOW3.DE",
+            "BEI.DE", "EOAN.DE", "FRE.DE", "MTX.DE", "SHL.DE",
+            "MC.PA", "OR.PA", "TTE.PA", "SAN.PA", "AI.PA",
+            "AIR.PA", "SU.PA", "BNP.PA", "CS.PA", "DG.PA",
+            "KER.PA", "RI.PA", "CAP.PA", "SGO.PA", "STM.PA",
+            "BN.PA", "EN.PA", "VIV.PA", "ACA.PA", "GLE.PA",
+            "SHEL.L", "AZN.L", "ULVR.L", "HSBA.L", "BP.L",
+            "GSK.L", "RIO.L", "LSEG.L", "DGE.L", "REL.L",
+            "BATS.L", "AAL.L", "NG.L", "VOD.L", "LLOY.L",
+            "BARC.L", "ANTO.L", "PRU.L", "CRH.L", "CPG.L",
+            "ASML.AS", "PHIA.AS", "UNA.AS", "INGA.AS", "AD.AS",
+            "NESN.SW", "NOVN.SW", "ROG.SW", "ABBN.SW", "UBSG.SW",
+            "ITX.MC", "IBE.MC", "SAN.MC", "BBVA.MC", "TEF.MC",
+            "ISP.MI", "UCG.MI", "ENI.MI", "ENEL.MI", "G.MI",
+            "VOLV-B.ST", "ERIC-B.ST", "ABB.ST", "SAND.ST",
+            "NOVO-B.CO", "CARL-B.CO", "MAERSK-B.CO",
+            "NESTE.HE", "FORTUM.HE", "NOKIA.HE",
+        ]
+        esami = set(tickeriai)
+        for t in fallback_eu:
+            if t not in esami:
+                tickeriai.append(t)
+
+    return list(dict.fromkeys([t for t in tickeriai if t]))
+
 
 def gauti_tickerius_japonija():
     import os
-    failo_kelias = os.path.join(os.path.dirname(__file__), "nikkei225.txt")
-    try:
-        with open(failo_kelias, "r") as f:
-            return [line.strip() for line in f if line.strip()]
-    except FileNotFoundError:
-        st.error("❌ Nerasta nikkei225.txt! Įdėk failą į tą patį folderį kaip app.py")
-        return []
 
-def gauti_tickerius_azija():
+    try:
+        failo_kelias = os.path.join(os.path.dirname(__file__), "nikkei225.txt")
+        with open(failo_kelias, "r") as f:
+            tickeriai = [line.strip() for line in f if line.strip()]
+        if len(tickeriai) > 50:
+            return tickeriai
+    except:
+        pass
+
+    st.info("ℹ️ nikkei225.txt nerasta — naudojamas atsarginis sąrašas (100 akcijų)")
     return [
-        "0700.HK","9988.HK","0941.HK","1299.HK","0005.HK",
-        "0939.HK","1398.HK","2318.HK","3690.HK","0388.HK",
-        "0883.HK","2628.HK","1810.HK","0016.HK","0027.HK",
-        "0066.HK","0175.HK","0267.HK","0386.HK","0688.HK",
-        "0762.HK","0857.HK","0868.HK","0960.HK","1088.HK",
-        "1093.HK","1109.HK","1113.HK","1211.HK","1876.HK",
-        "2020.HK","2313.HK","2382.HK","6098.HK","9618.HK",
-        "2388.HK","3988.HK","0669.HK","1044.HK","9999.HK",
-        "9888.HK","1024.HK","2269.HK","9868.HK",
+        "6758.T", "6861.T", "6954.T", "6976.T", "6762.T",
+        "6971.T", "6702.T", "6501.T", "6503.T", "6752.T",
+        "7735.T", "7741.T", "7751.T", "7752.T", "7974.T",
+        "4689.T", "9984.T", "9433.T", "9432.T", "9434.T",
+        "7203.T", "7267.T", "7269.T", "7270.T", "7201.T",
+        "7211.T", "7261.T",
+        "8306.T", "8316.T", "8411.T", "8766.T", "8801.T",
+        "8802.T", "8591.T", "8697.T",
+        "6301.T", "6305.T", "6902.T", "7011.T", "7012.T",
+        "7013.T", "5401.T", "5411.T", "5713.T", "5802.T",
+        "3407.T", "4063.T", "4452.T", "4502.T", "4503.T",
+        "4519.T", "4523.T", "4568.T", "4578.T",
+        "8001.T", "8002.T", "8031.T", "8035.T", "8053.T",
+        "8058.T",
+        "2914.T", "3382.T", "4901.T", "4911.T", "6367.T",
+        "6645.T", "6857.T", "6098.T", "6273.T", "7733.T",
+        "9020.T", "9021.T", "9022.T", "9101.T", "9104.T",
+        "9107.T", "1925.T", "1928.T", "2502.T", "2503.T",
+        "2801.T", "2802.T", "3659.T", "4307.T", "4661.T",
+        "6506.T", "6594.T", "6723.T", "6981.T", "8015.T",
+        "8725.T", "9735.T", "9766.T", "9983.T",
     ]
 
 
-def rodyti_rinku_skydeli():
-    try:
-        indeksai = {
-            "🇺🇸 S&P 500":   "^GSPC",
-            "💻 Nasdaq":      "^IXIC",
-            "🏭 Dow Jones":   "^DJI",
-            "🇪🇺 STOXX 50":  "^STOXX50E",
-            "💵 USD/EUR":     "USDEUR=X",
-            "🇯🇵 Nikkei":    "^N225",
-        }
+def gauti_tickerius_azija():
+    return [
+        "0700.HK", "9988.HK", "9618.HK", "9888.HK", "9999.HK",
+        "3690.HK", "1024.HK", "1810.HK", "2382.HK", "0268.HK",
+        "0285.HK", "0992.HK", "2018.HK",
+        "0005.HK", "1299.HK", "0388.HK", "2318.HK", "0939.HK",
+        "1398.HK", "3988.HK", "2628.HK", "2388.HK", "0011.HK",
+        "1109.HK",
+        "0941.HK", "0762.HK", "0728.HK",
+        "0883.HK", "0857.HK", "0386.HK", "1088.HK", "0016.HK",
+        "0066.HK", "0027.HK", "1113.HK",
+        "1211.HK", "2015.HK", "9866.HK", "9868.HK",
+        "0175.HK", "0669.HK", "1044.HK", "0960.HK", "1876.HK",
+        "2020.HK", "2269.HK", "2313.HK", "6098.HK", "0267.HK",
+        "0688.HK", "1093.HK", "0868.HK", "0017.HK", "0002.HK",
+        "0003.HK", "0006.HK", "0012.HK", "0101.HK", "0823.HK",
+        "1038.HK", "1997.HK",
+    ]
 
-        cols = st.columns(7)
 
-        for idx, (pav, ticker) in enumerate(indeksai.items()):
-            try:
-                d = yf.Ticker(ticker).history(period="5d")
-                if len(d) >= 2:
-                    kaina   = d["Close"].iloc[-1]
-                    pokytis = round((d["Close"].iloc[-1] - d["Close"].iloc[-2]) / d["Close"].iloc[-2] * 100, 2)
-
-                    if ticker == "USDEUR=X":
-                        kaina_str = f"{kaina:.4f}"
-                    elif kaina > 1000:
-                        kaina_str = f"{kaina:,.0f}"
-                    else:
-                        kaina_str = f"{kaina:.2f}"
-
-                    cols[idx].metric(
-                        label=pav,
-                        value=kaina_str,
-                        delta=f"{pokytis:+.2f}%",
-                    )
-                else:
-                    cols[idx].metric(label=pav, value="n/a")
-            except:
-                cols[idx].metric(label=pav, value="n/a")
-
+with st.expander("📊 Rinkų skydelis", expanded=False):
+    indeksai = {
+        "🇺🇸 S&P":   "^GSPC",
+        "💻 Nasdaq":  "^IXIC",
+        "🇪🇺 STOXX":  "^STOXX50E",
+        "🇯🇵 Nikkei": "^N225",
+    }
+    cols = st.columns(4)
+    for idx, (pav, ticker) in enumerate(indeksai.items()):
         try:
-            vix_d = yf.Ticker("^VIX").history(period="5d")
-            vix   = round(vix_d["Close"].iloc[-1], 1)
-            if vix < 15:
-                fg_label = "😎 Ekstr. godumas"
-                fg_spalva = "🟢"
-            elif vix < 20:
-                fg_label = "😊 Godumas"
-                fg_spalva = "🟡"
-            elif vix < 25:
-                fg_label = "😐 Neutralus"
-                fg_spalva = "🟡"
-            elif vix < 35:
-                fg_label = "😟 Baimė"
-                fg_spalva = "🔴"
+            d = yf.Ticker(ticker).history(period="5d")
+            if len(d) >= 2:
+                pokytis = round(
+                    (d["Close"].iloc[-1] - d["Close"].iloc[-2])
+                    / d["Close"].iloc[-2] * 100, 2
+                )
+                cols[idx].metric(pav, f"{d['Close'].iloc[-1]:,.0f}", f"{pokytis:+.2f}%")
             else:
-                fg_label = "😱 Ekstr. baimė"
-                fg_spalva = "🔴"
-            cols[6].metric(
-                label=f"{fg_spalva} VIX (F&G proxy)",
-                value=f"{vix}",
-                delta=fg_label,
-            )
+                cols[idx].metric(pav, "—")
         except:
-            cols[6].metric(label="VIX", value="n/a")
+            cols[idx].metric(pav, "—")
 
-    except Exception as e:
-        st.warning(f"Rinkų skydelis neprieinamas: {e}")
-
-# Rinkų skydelis
-rodyti_rinku_skydeli()
-st.divider()
-
-# ============================================
-# DEBUG SEKCIJA — laikinai, diagnostikai
-# ============================================
-with st.expander("🔍 DEBUG — testuoti tickerius", expanded=True):
-    debug_ticker = st.text_input("Įvesk tickerį testavimui", value="0700.HK")
-
-    if st.button("🧪 Testuoti"):
-        st.write(f"### Testuojama: `{debug_ticker}`")
-
-        st.write("**1. Bandymas gauti history (2y):**")
-        try:
-            akcija = yf.Ticker(debug_ticker)
-            duomenys = akcija.history(period="2y")
-            if duomenys.empty:
-                st.error("❌ history() grąžino TUŠČIĄ DataFrame")
-            else:
-                st.success(f"✅ history() OK — {len(duomenys)} eilučių")
-                st.write(f"Paskutinė kaina: {duomenys['Close'].iloc[-1]}")
-                st.write(f"Pirma data: {duomenys.index[0]}, paskutinė: {duomenys.index[-1]}")
-        except Exception as e:
-            st.error(f"❌ history() KLAIDA: {type(e).__name__}: {e}")
-
-        st.write("**2. Bandymas gauti .info:**")
-        try:
-            akcija2 = yf.Ticker(debug_ticker)
-            info = akcija2.info
-            if not info or len(info) < 2:
-                st.error(f"❌ .info tuščias arba minimalus: {info}")
-            else:
-                st.success(f"✅ .info OK — {len(info)} laukų")
-                st.write(f"trailingPE: {info.get('trailingPE', 'nėra')}")
-                st.write(f"shortName: {info.get('shortName', 'nėra')}")
-        except Exception as e:
-            st.error(f"❌ .info KLAIDA: {type(e).__name__}: {e}")
-
-        st.write("**3. Bandymas gauti fast_info:**")
-        try:
-            akcija3 = yf.Ticker(debug_ticker)
-            fi = akcija3.fast_info
-            st.success(f"✅ fast_info OK")
-            try:
-                st.write(f"last_price: {fi.get('lastPrice', 'nėra')}")
-            except:
-                st.write(f"fast_info objektas: {fi}")
-        except Exception as e:
-            st.error(f"❌ fast_info KLAIDA: {type(e).__name__}: {e}")
-
-        st.write("**4. yfinance versija:**")
-        st.write(f"yfinance: {yf.__version__}")
+    try:
+        vix_d = yf.Ticker("^VIX").history(period="5d")
+        vix = round(vix_d["Close"].iloc[-1], 1)
+        if vix < 15:
+            fg = "😎 Godumas"
+        elif vix < 20:
+            fg = "😊 Ramu"
+        elif vix < 25:
+            fg = "😐 Neutralu"
+        elif vix < 35:
+            fg = "😟 Baimė"
+        else:
+            fg = "😱 Panika"
+        st.metric("VIX", vix, fg)
+    except:
+        pass
 
 st.divider()
 
-if st.button("🚀 Analizuoti S&P 500"):
-    with st.spinner("Kraunamas S&P 500 sąrašas..."):
-        tickeriai = gauti_tickerius_sp500()
-    st.info(f"Randama akcijų: {len(tickeriai)}. Analizė užtruks ~15-20 min.")
+
+col1, col2 = st.columns(2)
+with col1:
+    btn_sp = st.button("🇺🇸 S&P 500")
+    btn_eu = st.button("🌍 Europa")
+with col2:
+    btn_jp = st.button("🇯🇵 Japonija")
+    btn_az = st.button("🌏 Azija (HK)")
+
+btn_all = st.button("🌐 Viską analizuoti", type="primary")
+
+
+def paleisti_analize(tickeriai, pavadinimas):
+    st.info(f"Randama akcijų: {len(tickeriai)}. Pradedama analizė...")
     progress = st.progress(0)
     statusas = st.empty()
     rezultatai = analizuoti(tickeriai, progress, statusas)
-    rodyti_rezultatus(rezultatai, "S&P 500")
+    rodyti_rezultatus(rezultatai, pavadinimas)
 
-if st.button("🌍 Analizuoti Europa"):
-    with st.spinner("Kraunamas Europos akcijų sąrašas..."):
-        tickeriai_eu = gauti_tickerius_europa()
-    st.info(f"Randama akcijų: {len(tickeriai_eu)}. Analizė užtruks ~20-25 min.")
-    progress_eu = st.progress(0)
-    statusas_eu = st.empty()
-    rezultatai_eu = analizuoti(tickeriai_eu, progress_eu, statusas_eu)
-    rodyti_rezultatus(rezultatai_eu, "Europa")
 
-if st.button("🗾 Analizuoti Japonija (Nikkei 225)"):
-    with st.spinner("Kraunamas Nikkei 225 sąrašas..."):
-        tickeriai_jp = gauti_tickerius_japonija()
-    st.info(f"Randama akcijų: {len(tickeriai_jp)}. Analizė užtruks ~10-15 min.")
-    progress_jp = st.progress(0)
-    statusas_jp = st.empty()
-    rezultatai_jp = analizuoti(tickeriai_jp, progress_jp, statusas_jp)
-    rodyti_rezultatus(rezultatai_jp, "Japonija")
+if btn_sp:
+    with st.spinner("Kraunama..."):
+        t = gauti_tickerius_sp500()
+    paleisti_analize(t, "S&P 500")
 
-if st.button("🌏 Analizuoti Azija (Hang Seng)"):
-    with st.spinner("Kraunamas Hang Seng sąrašas..."):
-        tickeriai_az = gauti_tickerius_azija()
-        tickeriai_az = list(dict.fromkeys(tickeriai_az))
-    st.info(f"Randama akcijų: {len(tickeriai_az)}. Analizė užtruks ~5-8 min.")
-    progress_az = st.progress(0)
-    statusas_az = st.empty()
-    rezultatai_az = analizuoti(tickeriai_az, progress_az, statusas_az)
-    rodyti_rezultatus(rezultatai_az, "Azija (Hang Seng)")
+if btn_eu:
+    with st.spinner("Kraunama..."):
+        t = gauti_tickerius_europa()
+    paleisti_analize(t, "Europa")
 
-if st.button("🌐 Analizuoti Viską (Globalus nugalėtojas)"):
+if btn_jp:
+    with st.spinner("Kraunama..."):
+        t = gauti_tickerius_japonija()
+    paleisti_analize(t, "Japonija")
+
+if btn_az:
+    with st.spinner("Kraunama..."):
+        t = gauti_tickerius_azija()
+    paleisti_analize(t, "Azija (Hang Seng)")
+
+if btn_all:
     with st.spinner("Kraunami visi sąrašai..."):
-        tickeriai_visi = (
+        t = list(dict.fromkeys(
             gauti_tickerius_sp500() +
             gauti_tickerius_europa() +
             gauti_tickerius_japonija() +
             gauti_tickerius_azija()
-        )
-        tickeriai_visi = list(dict.fromkeys(tickeriai_visi))
-    st.info(f"Iš viso akcijų: {len(tickeriai_visi)}. Analizė užtruks ~50-70 min.")
-    progress_v = st.progress(0)
-    statusas_v = st.empty()
-    visi_rezultatai = analizuoti(tickeriai_visi, progress_v, statusas_v)
-    rodyti_rezultatus(visi_rezultatai, "🌐 Globalus")
+        ))
+    paleisti_analize(t, "🌐 Globalus")
