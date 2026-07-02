@@ -344,7 +344,11 @@ def analizuoti(tickeriai, progress, statusas_txt):
                 "3m%":       round(m3, 1),
                 "6m%":       round(m6, 1),
                 "12m%":      round(m12, 1),
-                "P/E":       pe if pe else "—",
+                # PATAISYTA: naudojame None (o ne "—" tekstą), kad P/E stulpelis
+                # DataFrame'e liktų grynai skaitinis (float/NaN), o ne mišrus
+                # object tipas su string ir float reikšmėmis vienu metu.
+                # Būtent tai sukeldavo PyArrow serializacijos klaidą.
+                "P/E":       pe if pe is not None else None,
                 "RSI":       rsi,
                 "Rev":       f"{round(rev_g*100,1)}%" if rev_g is not None else "—",
                 "D/E":       de_str,
@@ -402,8 +406,12 @@ def rodyti_rezultatus(rezultatai, pavadinimas):
         "RSI":    r["RSI"],
         "P/E":    r["P/E"],
     } for r in top20])
+    # PATAISYTA: priverstinai konvertuojame P/E į skaitinį tipą.
+    # errors="coerce" bet kokias nekonvertuojamas reikšmes paverčia NaN.
+    df_trumpa["P/E"] = pd.to_numeric(df_trumpa["P/E"], errors="coerce")
 
-    st.dataframe(df_trumpa, hide_index=True, use_container_width=True)
+    # PATAISYTA: use_container_width -> width (senasis parametras bus pašalintas)
+    st.dataframe(df_trumpa, hide_index=True, width="stretch")
 
     with st.expander("📊 Pilna lentelė"):
         df_pilna = pd.DataFrame([{
@@ -421,7 +429,11 @@ def rodyti_rezultatus(rezultatai, pavadinimas):
             "FCF":    r["FCF"],
             "ROE":    r["ROE"],
         } for r in top20])
-        st.dataframe(df_pilna, hide_index=True, use_container_width=True)
+        # PATAISYTA: tas pats P/E konvertavimas ir čia
+        df_pilna["P/E"] = pd.to_numeric(df_pilna["P/E"], errors="coerce")
+
+        # PATAISYTA: use_container_width -> width
+        st.dataframe(df_pilna, hide_index=True, width="stretch")
 
     ispejimai_list = []
     for r in top20:
