@@ -1,5 +1,7 @@
-streamlit
-pandas
-yfinance
-pytickersymbols
+streamlit>=1.45
+yfinance>=0.2.50
+pandas>=2.0
+numpy
 lxml
+pytickersymbols
+matplotlib

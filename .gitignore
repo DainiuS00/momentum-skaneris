@@ -1,0 +1,7 @@
+turimos_pozicijos.txt
+skenavimai/
+backtest*
+__pycache__/
+senos_versijos/
+*.csv
+*.png
